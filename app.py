@@ -1,15 +1,8 @@
 import streamlit as st
-import snowflake.connector
+from snowflake.snowpark.context import get_active_session
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
-
-st.set_page_config(
-    page_title="Risk Adjustment Intelligence",
-    page_icon="🎯",
-    layout="wide",
-    initial_sidebar_state="expanded"
-)
 
 # ============================================================
 # CUSTOM CSS — Dark clinical intelligence aesthetic
@@ -141,35 +134,35 @@ st.markdown("""
 
 
 # ============================================================
-# CONNECTION
+# CONNECTION — Snowflake Native Streamlit (no secrets needed)
 # ============================================================
-@st.cache_resource
-def get_connection():
-    return snowflake.connector.connect(
-        account=st.secrets["snowflake"]["account"],
-        user=st.secrets["snowflake"]["user"],
-        password=st.secrets["snowflake"]["password"],
-        warehouse=st.secrets["snowflake"]["warehouse"],
-        database=st.secrets["snowflake"]["database"],
-        schema=st.secrets["snowflake"]["schema"],
-        role=st.secrets["snowflake"]["role"],
-    )
+session = get_active_session()
 
 def run_query(query):
-    conn = get_connection()
-    cursor = conn.cursor()
-    cursor.execute(query)
-    return cursor.fetchall()
+    result = session.sql(query).collect()
+    return [tuple(row) for row in result]
 
 def run_query_df(query):
-    conn = get_connection()
-    cursor = conn.cursor()
-    cursor.execute(query)
-    columns = [desc[0] for desc in cursor.description]
-    rows = cursor.fetchall()
-    return pd.DataFrame(rows, columns=columns)
+    return session.sql(query).to_pandas()
 
 CHART_COLORS = ["#8b5cf6","#6d28d9","#10b981","#f59e0b","#ef4444","#06b6d4","#ec4899","#84cc16","#f97316"]
+
+# Null-safe number formatter
+def sn(v, fmt=",.0f"):
+    """Safe number format — handles None, NaN, and non-numeric values"""
+    try:
+        if v is None: return "0"
+        return f"{float(v):{fmt}}"
+    except:
+        return str(v) if v is not None else "0"
+
+def sni(v):
+    """Safe integer format with commas"""
+    try:
+        if v is None: return "0"
+        return f"{int(v):,}"
+    except:
+        return str(v) if v is not None else "0"
 
 
 # ============================================================
@@ -200,10 +193,10 @@ with st.sidebar:
                 (SELECT COUNT(*) FROM HEDIS_QUALITY_DB.CLAIMS_DATA.V_RECAPTURE_OPPORTUNITIES),
                 (SELECT COUNT(*) FROM HEDIS_QUALITY_DB.CLAIMS_DATA.V_SUSPECT_WORKLIST)
         """)
-        st.metric("👥 Total Members", f"{plan[0][0]:,}")
+        st.metric("👥 Total Members", sni(plan[0][0]))
         st.metric("📊 Plan Avg RAF", f"{plan[0][1]}")
-        st.metric("🔄 Recapture Opps", f"{plan[0][2]:,}")
-        st.metric("🔍 Suspect Conditions", f"{plan[0][3]:,}")
+        st.metric("🔄 Recapture Opps", sni(plan[0][2]))
+        st.metric("🔍 Suspect Conditions", sni(plan[0][3]))
         
         st.divider()
         st.markdown("### 💰 Revenue Context")
@@ -241,7 +234,7 @@ with tab_dash:
 
         c1, c2, c3, c4, c5 = st.columns(5)
         with c1:
-            st.markdown(f'<div class="kpi-card"><div class="kpi-value">{s[0]:,}</div><div class="kpi-label">Total Members</div></div>', unsafe_allow_html=True)
+            st.markdown(f'<div class="kpi-card"><div class="kpi-value">{sni(s[0])}</div><div class="kpi-label">Total Members</div></div>', unsafe_allow_html=True)
         with c2:
             st.markdown(f'<div class="kpi-card"><div class="kpi-value">{s[1]}</div><div class="kpi-label">Avg RAF Score</div></div>', unsafe_allow_html=True)
         with c3:
@@ -301,13 +294,13 @@ with tab_dash:
         st.markdown('<div class="section-header">📋 Key Metrics</div>', unsafe_allow_html=True)
         m1, m2, m3, m4 = st.columns(4)
         with m1:
-            st.metric("Total HCCs Coded", f"{s[3]:,}")
+            st.metric("Total HCCs Coded", f"{sni(s[3])}")
         with m2:
             st.metric("Avg HCCs/Member", f"{s[4]}")
         with m3:
-            st.metric("Members with 0 HCCs", f"{s[9]:,}")
+            st.metric("Members with 0 HCCs", f"{sni(s[9])}")
         with m4:
-            st.metric("Members with 3+ HCCs", f"{s[10]:,}")
+            st.metric("Members with 3+ HCCs", f"{sni(s[10])}")
 
     except Exception as e:
         st.error(f"Error: {str(e)}")
@@ -330,14 +323,14 @@ with tab_recapture:
         """)
         rc1, rc2, rc3, rc4 = st.columns(4)
         with rc1:
-            st.markdown(f'<div class="kpi-card"><div class="kpi-value">{recap_stats[0][0]:,}</div><div class="kpi-label">Total Recapture Opps</div></div>', unsafe_allow_html=True)
+            st.markdown(f'<div class="kpi-card"><div class="kpi-value">{sni(recap_stats[0][0])}</div><div class="kpi-label">Total Recapture Opps</div></div>', unsafe_allow_html=True)
         with rc2:
-            st.markdown(f'<div class="kpi-card"><div class="kpi-value">{recap_stats[0][1]:,}</div><div class="kpi-label">Members Affected</div></div>', unsafe_allow_html=True)
+            st.markdown(f'<div class="kpi-card"><div class="kpi-value">{sni(recap_stats[0][1])}</div><div class="kpi-label">Members Affected</div></div>', unsafe_allow_html=True)
         with rc3:
-            rev = f"${recap_stats[0][2]:,}"
+            rev = f"${sni(recap_stats[0][2])}"
             st.markdown(f'<div class="kpi-card"><div class="kpi-value-red">{rev}</div><div class="kpi-label">Revenue at Risk</div></div>', unsafe_allow_html=True)
         with rc4:
-            st.markdown(f'<div class="kpi-card"><div class="kpi-value-red">{recap_stats[0][3]:,}</div><div class="kpi-label">Critical Priority</div></div>', unsafe_allow_html=True)
+            st.markdown(f'<div class="kpi-card"><div class="kpi-value-red">{sni(recap_stats[0][3])}</div><div class="kpi-label">Critical Priority</div></div>', unsafe_allow_html=True)
 
         st.markdown("")
 
@@ -418,14 +411,14 @@ with tab_suspect:
         """)
         sc1, sc2, sc3, sc4 = st.columns(4)
         with sc1:
-            st.markdown(f'<div class="kpi-card"><div class="kpi-value">{sus_stats[0][0]:,}</div><div class="kpi-label">Suspect Conditions</div></div>', unsafe_allow_html=True)
+            st.markdown(f'<div class="kpi-card"><div class="kpi-value">{sni(sus_stats[0][0])}</div><div class="kpi-label">Suspect Conditions</div></div>', unsafe_allow_html=True)
         with sc2:
-            st.markdown(f'<div class="kpi-card"><div class="kpi-value">{sus_stats[0][1]:,}</div><div class="kpi-label">Members Flagged</div></div>', unsafe_allow_html=True)
+            st.markdown(f'<div class="kpi-card"><div class="kpi-value">{sni(sus_stats[0][1])}</div><div class="kpi-label">Members Flagged</div></div>', unsafe_allow_html=True)
         with sc3:
-            rev = f"${sus_stats[0][2]:,}"
+            rev = f"${sni(sus_stats[0][2])}"
             st.markdown(f'<div class="kpi-card"><div class="kpi-value-amber">{rev}</div><div class="kpi-label">Est. Revenue Opportunity</div></div>', unsafe_allow_html=True)
         with sc4:
-            st.markdown(f'<div class="kpi-card"><div class="kpi-value-amber">{sus_stats[0][3]:,}</div><div class="kpi-label">High Priority</div></div>', unsafe_allow_html=True)
+            st.markdown(f'<div class="kpi-card"><div class="kpi-value-amber">{sni(sus_stats[0][3])}</div><div class="kpi-label">High Priority</div></div>', unsafe_allow_html=True)
 
         st.markdown("")
 
@@ -563,14 +556,14 @@ with tab_simulator:
 
         sr1, sr2, sr3, sr4 = st.columns(4)
         with sr1:
-            st.metric("Recapture Revenue at Risk", f"${total_at_risk:,}")
+            st.metric("Recapture Revenue at Risk", f"${sni(total_at_risk)}")
         with sr2:
-            st.metric("Projected Recovery", f"${recovered:,}", delta=f"+${recovered:,}")
+            st.metric("Projected Recovery", f"${sni(recovered)}", delta=f"+${sni(recovered)}")
         with sr3:
-            st.metric("Suspect Validation Revenue", f"${suspect_captured:,}", delta=f"+${suspect_captured:,}")
+            st.metric("Suspect Validation Revenue", f"${sni(suspect_captured)}", delta=f"+${sni(suspect_captured)}")
         with sr4:
             total_gain = recovered + suspect_captured
-            st.metric("Total Revenue Gain", f"${total_gain:,}", delta=f"+${total_gain:,}")
+            st.metric("Total Revenue Gain", f"${sni(total_gain)}", delta=f"+${sni(total_gain)}")
 
         # Gauge
         fig_gauge = go.Figure(go.Indicator(
@@ -698,19 +691,28 @@ with tab_chat:
                     # Gather context
                     plan_ctx = run_query("SELECT * FROM HEDIS_QUALITY_DB.CLAIMS_DATA.V_RAF_PLAN_SUMMARY")
                     p = plan_ctx[0]
+                    # Null-safe helper
+                    def safe_num(v, fmt=",.0f"):
+                        try:
+                            return f"{float(v):{fmt}}" if v is not None else "0"
+                        except:
+                            return str(v) if v is not None else "0"
                     plan_str = (
-                        f"Plan: {p[0]} members, avg RAF {p[1]}, est revenue ${p[2]:,.0f}. "
-                        f"Total HCCs coded: {p[3]}, avg HCCs/member: {p[4]}. "
-                        f"Recapture opportunities: {p[5]}, recapture revenue at risk: ${p[6]:,.0f}. "
-                        f"Suspect conditions: {p[7]}, suspect revenue opportunity: ${p[8]:,.0f}. "
-                        f"Members with 0 HCCs: {p[9]}, members with 3+ HCCs: {p[10]}."
+                        f"Plan: {safe_num(p[0])} members, avg RAF {safe_num(p[1],'.3f')}, est revenue ${safe_num(p[2])}. "
+                        f"Total HCCs coded: {safe_num(p[3])}, avg HCCs/member: {safe_num(p[4],'.1f')}. "
+                        f"Recapture opportunities: {safe_num(p[5])}, recapture revenue at risk: ${safe_num(p[6])}. "
+                        f"Suspect conditions: {safe_num(p[7])}, suspect revenue opportunity: ${safe_num(p[8])}. "
+                        f"Members with 0 HCCs: {safe_num(p[9])}, members with 3+ HCCs: {safe_num(p[10])}."
                     )
 
                     rev_ctx = run_query_df("SELECT * FROM HEDIS_QUALITY_DB.CLAIMS_DATA.V_REVENUE_SIMULATOR")
-                    rev_str = "Revenue scenarios by priority: " + "; ".join([
-                        f"{r['RECAPTURE_PRIORITY']}: {r['OPPORTUNITIES']} opps, ${r['TOTAL_REVENUE_AT_RISK']:,.0f} at risk"
-                        for _, r in rev_ctx.iterrows()
-                    ])
+                    try:
+                        rev_str = "Revenue scenarios by priority: " + "; ".join([
+                            f"{r['RECAPTURE_PRIORITY']}: {r['OPPORTUNITIES']} opps, ${safe_num(r['TOTAL_REVENUE_AT_RISK'])} at risk"
+                            for _, r in rev_ctx.iterrows()
+                        ])
+                    except:
+                        rev_str = "Revenue simulator data not available."
 
                     hcc_ctx = run_query_df("""
                         SELECT HCC_CODE, HCC_DESCRIPTION, RAF_WEIGHT, MEMBERS_CODED_2024, MEMBERS_NEED_RECAPTURE, MEMBERS_SUSPECT
