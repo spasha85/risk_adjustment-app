@@ -1,8 +1,15 @@
 import streamlit as st
-from snowflake.snowpark.context import get_active_session
+import snowflake.connector
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
+
+st.set_page_config(
+    page_title="Risk Adjustment Intelligence",
+    page_icon="🎯",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
 
 # ============================================================
 # CUSTOM CSS — Dark clinical intelligence aesthetic
@@ -136,14 +143,31 @@ st.markdown("""
 # ============================================================
 # CONNECTION — Snowflake Native Streamlit (no secrets needed)
 # ============================================================
-session = get_active_session()
+@st.cache_resource
+def get_connection():
+    return snowflake.connector.connect(
+        account=st.secrets["snowflake"]["account"],
+        user=st.secrets["snowflake"]["user"],
+        password=st.secrets["snowflake"]["password"],
+        warehouse=st.secrets["snowflake"]["warehouse"],
+        database=st.secrets["snowflake"]["database"],
+        schema=st.secrets["snowflake"]["schema"],
+        role=st.secrets["snowflake"]["role"],
+    )
 
 def run_query(query):
-    result = session.sql(query).collect()
-    return [tuple(row) for row in result]
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute(query)
+    return cursor.fetchall()
 
 def run_query_df(query):
-    return session.sql(query).to_pandas()
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute(query)
+    columns = [desc[0] for desc in cursor.description]
+    rows = cursor.fetchall()
+    return pd.DataFrame(rows, columns=columns)
 
 CHART_COLORS = ["#8b5cf6","#6d28d9","#10b981","#f59e0b","#ef4444","#06b6d4","#ec4899","#84cc16","#f97316"]
 
