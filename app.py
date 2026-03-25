@@ -240,8 +240,8 @@ with st.sidebar:
 # ============================================================
 # TABS
 # ============================================================
-tab_dash, tab_recapture, tab_suspect, tab_providers, tab_simulator, tab_hcc, tab_chat = st.tabs([
-    "📊 RAF Overview", "🔄 Recapture", "🔍 Suspects", "🏥 Providers", "💰 Simulator", "🧬 HCC Distribution", "💬 AI Chat"
+tab_dash, tab_chat, tab_recapture, tab_suspect, tab_providers, tab_simulator, tab_hcc = st.tabs([
+    "📊 RAF Overview", "💬 AI Chat", "🔄 Recapture", "🔍 Suspects", "🏥 Providers", "💰 Simulator", "🧬 HCC Distribution"
 ])
 
 
@@ -683,10 +683,12 @@ with tab_chat:
         ("💰", "If we recapture 70% of dropped codes, how much revenue?"),
         ("🧬", "What are the highest-value HCCs we should focus on?"),
     ]
+    def set_question(q):
+        st.session_state["ra_pending"] = q
     for i, (icon, q) in enumerate(questions):
         with qcols[i % 3]:
-            if st.button(f"{icon} {q}", key=f"ra_q_{i}", use_container_width=True):
-                st.session_state["ra_pending"] = q
+            st.button(f"{icon} {q}", key=f"ra_q_{i}", use_container_width=True,
+                      on_click=set_question, args=(q,))
 
     st.divider()
 
