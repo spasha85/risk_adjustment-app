@@ -668,27 +668,114 @@ with tab_providers:
 
 
 # ============================================================
-# TAB 5: REVENUE IMPACT SIMULATOR
+# TAB 5: REVENUE IMPACT SIMULATOR + PAYMENT FORECAST
 # ============================================================
 with tab_simulator:
-    st.markdown('<div class="section-header">💰 Revenue Impact Simulator</div>', unsafe_allow_html=True)
-    st.caption("Model the financial impact of recapturing dropped diagnoses and validating suspects.")
+    st.markdown('<div class="section-header">💰 Revenue & Payment Forecast</div>', unsafe_allow_html=True)
+    st.caption("CMS monthly payments, revenue scenarios, and recapture/suspect impact modeling.")
 
     try:
-        # Revenue simulator table
-        df_sim = run_query_df("SELECT * FROM HEDIS_QUALITY_DB.CLAIMS_DATA.V_REVENUE_SIMULATOR")
-        st.dataframe(df_sim, use_container_width=True, hide_index=True,
-            column_config={
-                "TOTAL_REVENUE_AT_RISK": st.column_config.NumberColumn("Total at Risk", format="$%,.0f"),
-                "IF_50_PCT_RECAPTURED": st.column_config.NumberColumn("50% Recapture", format="$%,.0f"),
-                "IF_75_PCT_RECAPTURED": st.column_config.NumberColumn("75% Recapture", format="$%,.0f"),
-                "IF_100_PCT_RECAPTURED": st.column_config.NumberColumn("100% Recapture", format="$%,.0f"),
-            })
+        # ---- ANNUAL REVENUE LADDER ----
+        st.markdown("**📊 Annual Revenue by Scenario**")
+        df_annual = run_query_df("SELECT * FROM HEDIS_QUALITY_DB.CLAIMS_DATA.V_ANNUAL_PAYMENT_SUMMARY ORDER BY SORT_ORDER")
+        if not df_annual.empty:
+            ak1, ak2, ak3, ak4 = st.columns(4)
+            for idx, (col, color) in enumerate(zip([ak1,ak2,ak3,ak4], ["kpi-value","kpi-value-green","kpi-value-amber","kpi-value-green"])):
+                if idx < len(df_annual):
+                    row = df_annual.iloc[idx]
+                    with col:
+                        st.markdown(f'<div class="kpi-card"><div class="{color}">${sn(row["ANNUAL_REVENUE"])}</div><div class="kpi-label">{row["SCENARIO"]}</div></div>', unsafe_allow_html=True)
+
+            st.markdown("")
+
+            # Revenue ladder bar chart
+            fig_ladder = go.Figure()
+            fig_ladder.add_trace(go.Bar(
+                x=df_annual["SCENARIO"], y=df_annual["ANNUAL_REVENUE"],
+                marker_color=["#8b5cf6","#6d28d9","#f59e0b","#10b981"],
+                text=df_annual["ANNUAL_REVENUE"].apply(lambda x: f"${sn(x)}"),
+                textposition="outside",
+            ))
+            fig_ladder.update_layout(height=350,
+                margin=dict(l=10,r=10,t=30,b=10),
+                plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
+                font=dict(family="DM Sans"),
+                yaxis=dict(title="Annual Revenue ($)", gridcolor="#f1f5f9"))
+            st.plotly_chart(fig_ladder, use_container_width=True)
 
         st.divider()
-        st.markdown("**🔮 Custom Scenario**")
-        st.caption("Adjust recapture rate to see projected revenue recovery.")
 
+        # ---- MONTHLY PAYMENT SCHEDULE ----
+        st.markdown("**📅 Monthly CMS Payment Schedule**")
+        st.caption("Accepted = what CMS pays today · Claims-Based = full RAF from claims · Gap = coding opportunity")
+        df_monthly = run_query_df("SELECT * FROM HEDIS_QUALITY_DB.CLAIMS_DATA.V_MONTHLY_PAYMENT_SCHEDULE ORDER BY PAYMENT_MONTH")
+        if not df_monthly.empty:
+            # Monthly totals KPIs
+            mk1, mk2, mk3 = st.columns(3)
+            with mk1:
+                avg_accepted = df_monthly["ACCEPTED_MONTHLY_REVENUE"].mean()
+                st.markdown(f'<div class="kpi-card"><div class="kpi-value">${sn(avg_accepted)}</div><div class="kpi-label">Avg Monthly Accepted</div></div>', unsafe_allow_html=True)
+            with mk2:
+                avg_claims = df_monthly["CLAIMS_MONTHLY_REVENUE"].mean()
+                st.markdown(f'<div class="kpi-card"><div class="kpi-value-green">${sn(avg_claims)}</div><div class="kpi-label">Avg Monthly Claims-Based</div></div>', unsafe_allow_html=True)
+            with mk3:
+                avg_gap = df_monthly["MONTHLY_CODING_GAP"].mean()
+                st.markdown(f'<div class="kpi-card"><div class="kpi-value-amber">${sn(avg_gap)}</div><div class="kpi-label">Avg Monthly Coding Gap</div></div>', unsafe_allow_html=True)
+
+            st.markdown("")
+
+            # Monthly trend chart
+            fig_monthly = go.Figure()
+            fig_monthly.add_trace(go.Scatter(
+                x=df_monthly["PAYMENT_MONTH"], y=df_monthly["ACCEPTED_MONTHLY_REVENUE"],
+                name="CMS Accepted (Actual)", mode="lines+markers",
+                line=dict(color="#8b5cf6", width=3), marker=dict(size=8)))
+            fig_monthly.add_trace(go.Scatter(
+                x=df_monthly["PAYMENT_MONTH"], y=df_monthly["CLAIMS_MONTHLY_REVENUE"],
+                name="Claims-Based (Forecast)", mode="lines+markers",
+                line=dict(color="#10b981", width=3, dash="dash"), marker=dict(size=8)))
+            fig_monthly.add_trace(go.Scatter(
+                x=df_monthly["PAYMENT_MONTH"], y=df_monthly["TOTAL_POTENTIAL_MONTHLY_REVENUE"],
+                name="Full Potential (w/ Recap+Suspects)", mode="lines+markers",
+                line=dict(color="#f59e0b", width=2, dash="dot"), marker=dict(size=6)))
+            fig_monthly.update_layout(height=400,
+                margin=dict(l=10,r=10,t=30,b=10),
+                plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
+                font=dict(family="DM Sans"),
+                yaxis=dict(title="Monthly Revenue ($)", gridcolor="#f1f5f9"),
+                xaxis=dict(title="Payment Month"),
+                legend=dict(orientation="h", y=-0.15))
+            st.plotly_chart(fig_monthly, use_container_width=True)
+
+            # Data table
+            st.dataframe(df_monthly, use_container_width=True, hide_index=True,
+                column_config={
+                    "ACCEPTED_MONTHLY_REVENUE": st.column_config.NumberColumn("Accepted $", format="$%,.0f"),
+                    "CLAIMS_MONTHLY_REVENUE": st.column_config.NumberColumn("Claims $", format="$%,.0f"),
+                    "MONTHLY_CODING_GAP": st.column_config.NumberColumn("Coding Gap $", format="$%,.0f"),
+                    "MONTHLY_RECAPTURE_OPPORTUNITY": st.column_config.NumberColumn("Recap Opp $", format="$%,.0f"),
+                    "MONTHLY_SUSPECT_OPPORTUNITY": st.column_config.NumberColumn("Suspect Opp $", format="$%,.0f"),
+                    "TOTAL_POTENTIAL_MONTHLY_REVENUE": st.column_config.NumberColumn("Total Potential $", format="$%,.0f"),
+                })
+
+        st.divider()
+
+        # ---- PAYMENT TIMELINE BY SWEEP ----
+        st.markdown("**🕐 Payment Timeline by CMS Sweep**")
+        st.caption("When payments hit: Initial sweeps pay Jan-Jun prospectively; Final sweeps create Jul-Dec retroactive adjustments.")
+        df_timeline = run_query_df("SELECT * FROM HEDIS_QUALITY_DB.CLAIMS_DATA.V_PAYMENT_TIMELINE ORDER BY PAYMENT_YEAR, SUBMISSION_DEADLINE")
+        if not df_timeline.empty:
+            st.dataframe(df_timeline, use_container_width=True, hide_index=True,
+                column_config={
+                    "REVENUE_CAPTURED": st.column_config.NumberColumn("Revenue Captured", format="$%,.0f"),
+                    "REVENUE_REJECTED": st.column_config.NumberColumn("Revenue Rejected", format="$%,.0f"),
+                    "DAYS_REMAINING": st.column_config.NumberColumn("Days Left", format="%d"),
+                })
+
+        st.divider()
+
+        # ---- CUSTOM RECAPTURE SIMULATOR ----
+        st.markdown("**🔮 Custom Recapture Scenario**")
         recapture_pct = st.slider("Recapture Rate:", 0, 100, 60, step=5, format="%d%%")
 
         total_at_risk = run_query("""
@@ -702,7 +789,7 @@ with tab_simulator:
         """)[0][0] or 0
 
         recovered = round(total_at_risk * recapture_pct / 100)
-        suspect_captured = round(suspect_rev * recapture_pct / 100 * 0.6)  # 60% validation rate
+        suspect_captured = round(suspect_rev * recapture_pct / 100 * 0.6)
 
         sr1, sr2, sr3, sr4 = st.columns(4)
         with sr1:
@@ -714,6 +801,16 @@ with tab_simulator:
         with sr4:
             total_gain = recovered + suspect_captured
             st.metric("Total Revenue Gain", f"${sni(total_gain)}", delta=f"+${sni(total_gain)}")
+
+        # Recapture by priority
+        df_sim = run_query_df("SELECT * FROM HEDIS_QUALITY_DB.CLAIMS_DATA.V_REVENUE_SIMULATOR")
+        st.dataframe(df_sim, use_container_width=True, hide_index=True,
+            column_config={
+                "TOTAL_REVENUE_AT_RISK": st.column_config.NumberColumn("Total at Risk", format="$%,.0f"),
+                "IF_50_PCT_RECAPTURED": st.column_config.NumberColumn("50% Recapture", format="$%,.0f"),
+                "IF_75_PCT_RECAPTURED": st.column_config.NumberColumn("75% Recapture", format="$%,.0f"),
+                "IF_100_PCT_RECAPTURED": st.column_config.NumberColumn("100% Recapture", format="$%,.0f"),
+            })
 
         # Gauge
         fig_gauge = go.Figure(go.Indicator(
@@ -908,6 +1005,9 @@ Tables (all HEDIS_QUALITY_DB.CLAIMS_DATA):
 - EDS_SUBMISSIONS (SUBMISSION_ID, MEMBER_ID, CLAIM_ID, CONTRACT_ID, ICD10_CODE, HCC_CODE, HCC_DESCRIPTION, RAF_WEIGHT, DOS_FROM, DOS_THRU, PROVIDER_NPI, SUBMISSION_TYPE, SUBMISSION_DATE, STATUS, REJECTION_REASON)
 - RAPS_SUBMISSIONS (SUBMISSION_ID, MEMBER_ID, CONTRACT_ID, ICD10_CODE, HCC_CODE, HCC_DESCRIPTION, DOS_FROM, DOS_THRU, PROVIDER_NPI, TRANSACTION_TYPE, SUBMISSION_DATE, STATUS, ERROR_CODE)
 - CHART_REVIEW_RADV (REVIEW_ID, MEMBER_ID, PROVIDER_NPI, PCP_GROUP, ORIGINAL_ICD10, ORIGINAL_HCC, HCC_DESCRIPTION, ORIGINAL_RAF_WEIGHT, REVIEW_OUTCOME, RAF_IMPACT, REVENUE_IMPACT, REVIEWER, REVIEW_TYPE, REVIEW_DATE)
+- V_MONTHLY_PAYMENT_SCHEDULE (PAYMENT_MONTH, ACTIVE_MEMBERS, AVG_ACCEPTED_RAF, ACCEPTED_MONTHLY_REVENUE, AVG_CLAIMS_RAF, CLAIMS_MONTHLY_REVENUE, MONTHLY_CODING_GAP, MONTHLY_RECAPTURE_OPPORTUNITY, MONTHLY_SUSPECT_OPPORTUNITY, TOTAL_POTENTIAL_MONTHLY_REVENUE)
+- V_ANNUAL_PAYMENT_SUMMARY (SCENARIO, SORT_ORDER, MEMBERS, AVG_RAF, ANNUAL_REVENUE)
+- V_PAYMENT_TIMELINE (PAYMENT_YEAR, SWEEP_NUMBER, SWEEP_NAME, SUBMISSION_DEADLINE, DOS_START, DOS_END, PAYMENT_TIMING, DEADLINE_STATUS, DAYS_REMAINING, SUBMISSIONS_ACCEPTED, REVENUE_CAPTURED, SUBMISSIONS_REJECTED, REVENUE_REJECTED)
 Use fully qualified table names. LIMIT 25. Return ONLY SQL."""
                             safe_sq = sq.replace("'", "''")
                             sr2 = run_query(f"SELECT SNOWFLAKE.CORTEX.COMPLETE('claude-3-5-sonnet','{safe_sq}')")
