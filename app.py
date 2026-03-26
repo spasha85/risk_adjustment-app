@@ -240,8 +240,8 @@ with st.sidebar:
 # ============================================================
 # TABS
 # ============================================================
-tab_dash, tab_chat, tab_recapture, tab_suspect, tab_providers, tab_simulator, tab_hcc = st.tabs([
-    "📊 RAF Overview", "💬 AI Chat", "🔄 Recapture", "🔍 Suspects", "🏥 Providers", "💰 Simulator", "🧬 HCC Distribution"
+tab_dash, tab_chat, tab_sweeps, tab_recapture, tab_suspect, tab_providers, tab_simulator, tab_hcc = st.tabs([
+    "📊 RAF Overview", "💬 AI Chat", "📅 Sweep Tracker", "🔄 Recapture", "🔍 Suspects", "🏥 Providers", "💰 Simulator", "🧬 HCC Distribution"
 ])
 
 
@@ -331,6 +331,128 @@ with tab_dash:
 
 
 # ============================================================
+# TAB 3: SWEEP TRACKER
+# ============================================================
+with tab_sweeps:
+    st.markdown('<div class="section-header">📅 CMS Payment Sweep Tracker</div>', unsafe_allow_html=True)
+    st.caption("Track submissions, revenue, and deadlines across CMS risk adjustment payment sweeps.")
+
+    try:
+        # Sweep deadlines reference
+        st.markdown("**📋 CMS Sweep Schedule**")
+        df_sweeps = run_query_df("""
+            SELECT PAYMENT_YEAR, SWEEP_NUMBER, SWEEP_NAME, SUBMISSION_DEADLINE,
+                   DOS_START, DOS_END, DESCRIPTION
+            FROM HEDIS_QUALITY_DB.CLAIMS_DATA.CMS_SWEEP_DATES
+            ORDER BY PAYMENT_YEAR, SUBMISSION_DEADLINE
+        """)
+        st.dataframe(df_sweeps, use_container_width=True, hide_index=True)
+
+        st.divider()
+
+        # Revenue by sweep
+        st.markdown('<div class="section-header">💰 Revenue Captured by Sweep</div>', unsafe_allow_html=True)
+        try:
+            df_sweep_rev = run_query_df("""
+                SELECT PAYMENT_YEAR, SWEEP_NAME, SUBMISSION_DEADLINE,
+                       TOTAL_SUBMISSIONS, ACCEPTED, REJECTED, PENDING,
+                       UNIQUE_MEMBERS, UNIQUE_HCCS,
+                       TOTAL_ACCEPTED_REVENUE, REJECTED_REVENUE_LOST, PENDING_REVENUE
+                FROM HEDIS_QUALITY_DB.CLAIMS_DATA.V_SWEEP_REVENUE_SUMMARY
+                ORDER BY PAYMENT_YEAR, SUBMISSION_DEADLINE
+            """)
+            if not df_sweep_rev.empty:
+                total_accepted = df_sweep_rev["TOTAL_ACCEPTED_REVENUE"].sum()
+                total_rejected = df_sweep_rev["REJECTED_REVENUE_LOST"].sum()
+                total_pending = df_sweep_rev["PENDING_REVENUE"].sum()
+
+                sk1, sk2, sk3, sk4 = st.columns(4)
+                with sk1:
+                    st.markdown(f'<div class="kpi-card"><div class="kpi-value-green">${sn(total_accepted)}</div><div class="kpi-label">Accepted Revenue</div></div>', unsafe_allow_html=True)
+                with sk2:
+                    st.markdown(f'<div class="kpi-card"><div class="kpi-value-red">${sn(total_rejected)}</div><div class="kpi-label">Rejected Revenue Lost</div></div>', unsafe_allow_html=True)
+                with sk3:
+                    st.markdown(f'<div class="kpi-card"><div class="kpi-value-amber">${sn(total_pending)}</div><div class="kpi-label">Pending Revenue</div></div>', unsafe_allow_html=True)
+                with sk4:
+                    reject_rate = round(df_sweep_rev["REJECTED"].sum() / max(df_sweep_rev["TOTAL_SUBMISSIONS"].sum(),1) * 100, 1)
+                    st.markdown(f'<div class="kpi-card"><div class="kpi-value-red">{reject_rate}%</div><div class="kpi-label">Rejection Rate</div></div>', unsafe_allow_html=True)
+
+                st.markdown("")
+                st.dataframe(df_sweep_rev, use_container_width=True, hide_index=True,
+                    column_config={
+                        "TOTAL_ACCEPTED_REVENUE": st.column_config.NumberColumn("Accepted $", format="$%,.0f"),
+                        "REJECTED_REVENUE_LOST": st.column_config.NumberColumn("Rejected $", format="$%,.0f"),
+                        "PENDING_REVENUE": st.column_config.NumberColumn("Pending $", format="$%,.0f"),
+                    })
+
+                fig_sweep = go.Figure()
+                fig_sweep.add_trace(go.Bar(name="Accepted", x=df_sweep_rev["SWEEP_NAME"],
+                    y=df_sweep_rev["TOTAL_ACCEPTED_REVENUE"], marker_color="#10b981"))
+                fig_sweep.add_trace(go.Bar(name="Rejected", x=df_sweep_rev["SWEEP_NAME"],
+                    y=df_sweep_rev["REJECTED_REVENUE_LOST"], marker_color="#ef4444"))
+                fig_sweep.add_trace(go.Bar(name="Pending", x=df_sweep_rev["SWEEP_NAME"],
+                    y=df_sweep_rev["PENDING_REVENUE"], marker_color="#f59e0b"))
+                fig_sweep.update_layout(barmode="group", height=400,
+                    margin=dict(l=10,r=10,t=30,b=10),
+                    plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
+                    font=dict(family="DM Sans"),
+                    yaxis=dict(title="Revenue ($)", gridcolor="#f1f5f9"),
+                    legend=dict(orientation="h", y=-0.15))
+                st.plotly_chart(fig_sweep, use_container_width=True)
+            else:
+                st.info("No sweep revenue data available yet.")
+        except Exception as e:
+            st.info(f"Sweep revenue view not available: {str(e)}")
+
+        st.divider()
+
+        # EDS submission status
+        st.markdown('<div class="section-header">📊 EDS Submission Status</div>', unsafe_allow_html=True)
+        try:
+            df_eds = run_query_df("""
+                SELECT STATUS, COUNT(*) AS SUBMISSION_COUNT,
+                       COUNT(DISTINCT MEMBER_ID) AS UNIQUE_MEMBERS,
+                       COUNT(DISTINCT HCC_CODE) AS UNIQUE_HCCS
+                FROM HEDIS_QUALITY_DB.CLAIMS_DATA.EDS_SUBMISSIONS
+                GROUP BY STATUS ORDER BY SUBMISSION_COUNT DESC
+            """)
+            col_eds1, col_eds2 = st.columns([2, 3])
+            with col_eds1:
+                st.dataframe(df_eds, use_container_width=True, hide_index=True)
+            with col_eds2:
+                fig_eds = px.pie(df_eds, values="SUBMISSION_COUNT", names="STATUS",
+                    color_discrete_map={"Accepted":"#10b981","Rejected":"#ef4444","Pending":"#f59e0b"},
+                    hole=0.55)
+                fig_eds.update_layout(height=300, margin=dict(l=10,r=10,t=10,b=10),
+                    font=dict(family="DM Sans"), paper_bgcolor="rgba(0,0,0,0)")
+                fig_eds.update_traces(textposition='inside', textinfo='percent+label')
+                st.plotly_chart(fig_eds, use_container_width=True)
+        except Exception as e:
+            st.info(f"EDS summary not available: {str(e)}")
+
+        # Chart review
+        st.divider()
+        st.markdown('<div class="section-header">📝 Chart Review / RADV Results</div>', unsafe_allow_html=True)
+        try:
+            df_review = run_query_df("""
+                SELECT REVIEW_OUTCOME, REVIEW_COUNT, MEMBERS_REVIEWED,
+                       AVG_ORIGINAL_RAF, AVG_RAF_IMPACT, TOTAL_REVENUE_IMPACT
+                FROM HEDIS_QUALITY_DB.CLAIMS_DATA.V_CHART_REVIEW_SUMMARY
+            """)
+            st.dataframe(df_review, use_container_width=True, hide_index=True,
+                column_config={
+                    "AVG_ORIGINAL_RAF": st.column_config.NumberColumn("Avg RAF", format="%.3f"),
+                    "AVG_RAF_IMPACT": st.column_config.NumberColumn("Avg Impact", format="%.3f"),
+                    "TOTAL_REVENUE_IMPACT": st.column_config.NumberColumn("Revenue Impact", format="$%,.0f"),
+                })
+        except Exception as e:
+            st.info(f"Chart review data not available: {str(e)}")
+
+    except Exception as e:
+        st.error(f"Error: {str(e)}")
+
+
+# ============================================================
 # TAB 2: RECAPTURE WORKLIST
 # ============================================================
 with tab_recapture:
@@ -375,7 +497,8 @@ with tab_recapture:
         df_recap = run_query_df(f"""
             SELECT MEMBER_ID, LAST_NAME, FIRST_NAME, AGE, PCP_GROUP,
                    HCC_CODE, HCC_DESCRIPTION, HCC_CATEGORY, RAF_WEIGHT,
-                   REVENUE_AT_RISK, RECAPTURE_PRIORITY
+                   REVENUE_AT_RISK, RECAPTURE_PRIORITY,
+                   TARGET_SWEEP, DAYS_UNTIL_DEADLINE, SWEEP_URGENCY
             FROM HEDIS_QUALITY_DB.CLAIMS_DATA.V_RECAPTURE_OPPORTUNITIES
             WHERE 1=1 {where_sql}
             ORDER BY RAF_WEIGHT DESC
@@ -385,6 +508,7 @@ with tab_recapture:
             column_config={
                 "RAF_WEIGHT": st.column_config.NumberColumn("RAF Weight", format="%.3f"),
                 "REVENUE_AT_RISK": st.column_config.NumberColumn("Revenue at Risk", format="$%,.0f"),
+                "DAYS_UNTIL_DEADLINE": st.column_config.NumberColumn("Days to Deadline", format="%d"),
             })
 
         # Recapture by HCC
@@ -463,7 +587,8 @@ with tab_suspect:
         df_sus = run_query_df(f"""
             SELECT MEMBER_ID, LAST_NAME, FIRST_NAME, AGE, PCP_GROUP,
                    SUSPECT_HCC, HCC_DESCRIPTION, EVIDENCE_SOURCE, EVIDENCE_DETAIL,
-                   PRIORITY, CONFIDENCE_SCORE, EST_REVENUE_IMPACT
+                   PRIORITY, CONFIDENCE_SCORE, EST_REVENUE_IMPACT,
+                   EARLIEST_DOS, LATEST_DOS, TARGET_SWEEP, DAYS_UNTIL_DEADLINE, SWEEP_URGENCY
             FROM HEDIS_QUALITY_DB.CLAIMS_DATA.V_SUSPECT_WORKLIST
             WHERE 1=1 {swhere_sql}
             ORDER BY CONFIDENCE_SCORE DESC
@@ -473,6 +598,7 @@ with tab_suspect:
             column_config={
                 "CONFIDENCE_SCORE": st.column_config.ProgressColumn("Confidence", min_value=0, max_value=1, format="%.0f%%"),
                 "EST_REVENUE_IMPACT": st.column_config.NumberColumn("Est Revenue", format="$%,.0f"),
+                "DAYS_UNTIL_DEADLINE": st.column_config.NumberColumn("Days to Deadline", format="%d"),
             })
 
         # By HCC
@@ -755,6 +881,7 @@ with tab_chat:
 {rev_str}
 {hcc_str}
 CMS pays ~$11,826 per member per year at RAF 1.0. Each 0.1 RAF increase = ~$1,183/member/year.
+CMS sweep deadlines: PY2025 Final-H1 due 2025-01-31, Final-H2 due 2025-03-31, Final-H3 due 2025-08-31. DOS window for PY2025 is CY2024 (2024-01-01 to 2024-12-31). Submissions must be in RAPS or EDS format before the sweep deadline to count for that payment year.
 Question: {prompt}
 Use specific numbers from the data. Be concise and actionable."""
 
@@ -771,11 +898,16 @@ Use specific numbers from the data. Be concise and actionable."""
                             sq = f"""Write a Snowflake SELECT query for: "{prompt}"
 Tables (all HEDIS_QUALITY_DB.CLAIMS_DATA):
 - MEMBER_ENROLLMENT (MEMBER_ID, FIRST_NAME, LAST_NAME, AGE, GENDER, PCP_NAME, PCP_GROUP, DUAL_ELIGIBLE_FLAG, HCC_RISK_SCORE, DX_DIABETES, DX_HYPERTENSION, DX_CHF, DX_COPD, DX_CKD, DX_CAD, DX_DEPRESSION, DX_OBESITY)
-- V_MEMBER_RAF_SCORE (MEMBER_ID, FIRST_NAME, LAST_NAME, AGE, GENDER, PCP_NAME, PCP_GROUP, HCC_COUNT, CALCULATED_RAF, ESTIMATED_ANNUAL_REVENUE)
-- V_RECAPTURE_OPPORTUNITIES (MEMBER_ID, LAST_NAME, FIRST_NAME, AGE, PCP_NAME, PCP_GROUP, HCC_CODE, HCC_DESCRIPTION, HCC_CATEGORY, RAF_WEIGHT, REVENUE_AT_RISK, RECAPTURE_PRIORITY)
-- V_SUSPECT_WORKLIST (SUSPECT_ID, MEMBER_ID, LAST_NAME, FIRST_NAME, AGE, PCP_NAME, PCP_GROUP, SUSPECT_HCC, HCC_DESCRIPTION, EVIDENCE_SOURCE, EVIDENCE_DETAIL, PRIORITY, CONFIDENCE_SCORE, EST_REVENUE_IMPACT)
+- V_MEMBER_RAF_SCORE (MEMBER_ID, FIRST_NAME, LAST_NAME, AGE, GENDER, PCP_NPI, PCP_GROUP, HCC_COUNT, CALCULATED_RAF, ESTIMATED_ANNUAL_REVENUE, DEMOGRAPHIC_RAF, HCC_RAF_INCREMENT)
+- V_RECAPTURE_OPPORTUNITIES (MEMBER_ID, LAST_NAME, FIRST_NAME, AGE, PCP_NPI, PCP_GROUP, HCC_CODE, HCC_DESCRIPTION, HCC_CATEGORY, RAF_WEIGHT, REVENUE_AT_RISK, RECAPTURE_PRIORITY, TARGET_SWEEP, DAYS_UNTIL_DEADLINE, SWEEP_URGENCY, PAYMENT_YEAR_IMPACTED)
+- V_SUSPECT_WORKLIST (SUSPECT_ID, MEMBER_ID, LAST_NAME, FIRST_NAME, AGE, PCP_NPI, PCP_GROUP, SUSPECT_HCC, HCC_DESCRIPTION, EVIDENCE_SOURCE, EVIDENCE_DETAIL, PRIORITY, CONFIDENCE_SCORE, EST_REVENUE_IMPACT, EARLIEST_DOS, LATEST_DOS, TARGET_SWEEP, DAYS_UNTIL_DEADLINE, SWEEP_URGENCY, PAYMENT_YEAR_IMPACTED)
 - V_PROVIDER_CODING_SCORECARD (PCP_GROUP, PANEL_SIZE, AVG_RAF, TOTAL_HCCS_CODED, AVG_HCCS_PER_MEMBER, TOTAL_RECAPTURE_OPPS, TOTAL_REVENUE_AT_RISK, TOTAL_SUSPECT_REVENUE)
 - V_HCC_DISTRIBUTION (HCC_CATEGORY, HCC_CODE, HCC_DESCRIPTION, RAF_WEIGHT, MEMBERS_CODED_2024, MEMBERS_NEED_RECAPTURE, MEMBERS_SUSPECT)
+- V_SWEEP_REVENUE_SUMMARY (PAYMENT_YEAR, SWEEP_NAME, SUBMISSION_DEADLINE, TOTAL_SUBMISSIONS, ACCEPTED, REJECTED, PENDING, TOTAL_ACCEPTED_REVENUE, REJECTED_REVENUE_LOST, PENDING_REVENUE)
+- CMS_SWEEP_DATES (PAYMENT_YEAR, SWEEP_NUMBER, SWEEP_NAME, SUBMISSION_DEADLINE, DOS_START, DOS_END, DESCRIPTION)
+- EDS_SUBMISSIONS (SUBMISSION_ID, MEMBER_ID, CLAIM_ID, CONTRACT_ID, ICD10_CODE, HCC_CODE, HCC_DESCRIPTION, RAF_WEIGHT, DOS_FROM, DOS_THRU, PROVIDER_NPI, SUBMISSION_TYPE, SUBMISSION_DATE, STATUS, REJECTION_REASON)
+- RAPS_SUBMISSIONS (SUBMISSION_ID, MEMBER_ID, CONTRACT_ID, ICD10_CODE, HCC_CODE, HCC_DESCRIPTION, DOS_FROM, DOS_THRU, PROVIDER_NPI, TRANSACTION_TYPE, SUBMISSION_DATE, STATUS, ERROR_CODE)
+- CHART_REVIEW_RADV (REVIEW_ID, MEMBER_ID, PROVIDER_NPI, PCP_GROUP, ORIGINAL_ICD10, ORIGINAL_HCC, HCC_DESCRIPTION, ORIGINAL_RAF_WEIGHT, REVIEW_OUTCOME, RAF_IMPACT, REVENUE_IMPACT, REVIEWER, REVIEW_TYPE, REVIEW_DATE)
 Use fully qualified table names. LIMIT 25. Return ONLY SQL."""
                             safe_sq = sq.replace("'", "''")
                             sr2 = run_query(f"SELECT SNOWFLAKE.CORTEX.COMPLETE('claude-3-5-sonnet','{safe_sq}')")
