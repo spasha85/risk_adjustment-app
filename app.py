@@ -252,26 +252,26 @@ with tab_dash:
     try:
         summary = run_query("SELECT * FROM HEDIS_QUALITY_DB.CLAIMS_DATA.V_RAF_PLAN_SUMMARY")
         s = summary[0]
-        # s: TOTAL_MEMBERS, AVG_RAF, TOTAL_ESTIMATED_REVENUE, TOTAL_HCCS_CODED,
-        #    AVG_HCCS_PER_MEMBER, TOTAL_RECAPTURE_OPPS, RECAPTURE_REVENUE_AT_RISK,
-        #    TOTAL_SUSPECT_OPPS, SUSPECT_REVENUE_OPPORTUNITY, MEMBERS_NO_HCCS, MEMBERS_3_PLUS_HCCS
 
+        # KPI Row
         c1, c2, c3, c4, c5 = st.columns(5)
         with c1:
             st.markdown(f'<div class="kpi-card"><div class="kpi-value">{sni(s[0])}</div><div class="kpi-label">Total Members</div></div>', unsafe_allow_html=True)
         with c2:
-            st.markdown(f'<div class="kpi-card"><div class="kpi-value">{s[1]}</div><div class="kpi-label">Avg RAF Score</div></div>', unsafe_allow_html=True)
+            st.markdown(f'<div class="kpi-card"><div class="kpi-value">{sn(s[1],".3f")}</div><div class="kpi-label">Avg RAF Score</div></div>', unsafe_allow_html=True)
         with c3:
             rev = f"${s[2]/1000000:.1f}M" if s[2] else "$0"
             st.markdown(f'<div class="kpi-card"><div class="kpi-value-green">{rev}</div><div class="kpi-label">Est. Annual Revenue</div></div>', unsafe_allow_html=True)
         with c4:
             recap_rev = f"${s[6]/1000000:.1f}M" if s[6] else "$0"
-            st.markdown(f'<div class="kpi-card"><div class="kpi-value-red">{recap_rev}</div><div class="kpi-label">Recapture Revenue at Risk</div></div>', unsafe_allow_html=True)
+            st.markdown(f'<div class="kpi-card"><div class="kpi-value-red">{recap_rev}</div><div class="kpi-label">Recapture at Risk</div></div>', unsafe_allow_html=True)
         with c5:
             suspect_rev = f"${s[8]/1000000:.1f}M" if s[8] else "$0"
-            st.markdown(f'<div class="kpi-card"><div class="kpi-value-amber">{suspect_rev}</div><div class="kpi-label">Suspect Revenue Opportunity</div></div>', unsafe_allow_html=True)
+            st.markdown(f'<div class="kpi-card"><div class="kpi-value-amber">{suspect_rev}</div><div class="kpi-label">Suspect Opportunity</div></div>', unsafe_allow_html=True)
 
         st.markdown("")
+
+        # ---- ROW 1: RAF Distribution + Revenue by RAF Tier ----
         col_left, col_right = st.columns([3, 2])
 
         with col_left:
@@ -279,52 +279,162 @@ with tab_dash:
             df_raf = run_query_df("""
                 SELECT
                     CASE
-                        WHEN CALCULATED_RAF < 0.5 THEN 'Under 0.5'
-                        WHEN CALCULATED_RAF < 1.0 THEN '0.5 - 0.99'
-                        WHEN CALCULATED_RAF < 1.5 THEN '1.0 - 1.49'
-                        WHEN CALCULATED_RAF < 2.0 THEN '1.5 - 1.99'
-                        ELSE '2.0+'
+                        WHEN CALCULATED_RAF < 0.5 THEN '< 0.50'
+                        WHEN CALCULATED_RAF < 1.0 THEN '0.50–0.99'
+                        WHEN CALCULATED_RAF < 1.5 THEN '1.00–1.49'
+                        WHEN CALCULATED_RAF < 2.0 THEN '1.50–1.99'
+                        WHEN CALCULATED_RAF < 2.5 THEN '2.00–2.49'
+                        ELSE '2.50+'
                     END AS RAF_BUCKET,
+                    CASE
+                        WHEN CALCULATED_RAF < 0.5 THEN 1
+                        WHEN CALCULATED_RAF < 1.0 THEN 2
+                        WHEN CALCULATED_RAF < 1.5 THEN 3
+                        WHEN CALCULATED_RAF < 2.0 THEN 4
+                        WHEN CALCULATED_RAF < 2.5 THEN 5
+                        ELSE 6
+                    END AS SORT_ORDER,
                     COUNT(*) AS MEMBERS,
-                    ROUND(AVG(ESTIMATED_ANNUAL_REVENUE), 0) AS AVG_REVENUE
+                    ROUND(AVG(ESTIMATED_ANNUAL_REVENUE), 0) AS AVG_REVENUE,
+                    ROUND(AVG(CALCULATED_RAF), 3) AS AVG_RAF
                 FROM HEDIS_QUALITY_DB.CLAIMS_DATA.V_MEMBER_RAF_SCORE
-                GROUP BY RAF_BUCKET
-                ORDER BY RAF_BUCKET
+                GROUP BY RAF_BUCKET, SORT_ORDER
+                ORDER BY SORT_ORDER
             """)
-            fig_raf = px.bar(df_raf, x="RAF_BUCKET", y="MEMBERS", color="MEMBERS",
-                             color_continuous_scale=["#c4b5fd","#8b5cf6","#6d28d9","#4c1d95"],
-                             text="MEMBERS")
-            fig_raf.update_layout(height=400, showlegend=False,
-                margin=dict(l=10,r=10,t=10,b=10),
+            # Modern gradient bar chart
+            fig_raf = go.Figure()
+            colors = ['#ede9fe','#c4b5fd','#a78bfa','#8b5cf6','#7c3aed','#6d28d9']
+            fig_raf.add_trace(go.Bar(
+                x=df_raf["RAF_BUCKET"], y=df_raf["MEMBERS"],
+                marker=dict(color=colors[:len(df_raf)], line=dict(width=0)),
+                text=[f"<b>{m}</b><br><span style='font-size:10px'>${r:,.0f}/yr</span>"
+                      for m, r in zip(df_raf["MEMBERS"], df_raf["AVG_REVENUE"])],
+                textposition="outside", textfont=dict(size=11),
+                hovertemplate="<b>%{x}</b><br>Members: %{y}<br>Avg Revenue: $%{customdata:,.0f}<extra></extra>",
+                customdata=df_raf["AVG_REVENUE"],
+            ))
+            fig_raf.update_layout(height=380, showlegend=False,
+                margin=dict(l=0,r=0,t=20,b=40),
                 plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
-                font=dict(family="DM Sans"),
-                xaxis_title="RAF Score Range", yaxis_title="Members",
-                yaxis=dict(gridcolor="#f1f5f9"),
-                coloraxis_showscale=False)
-            fig_raf.update_traces(textposition="outside")
+                font=dict(family="DM Sans", size=12),
+                xaxis=dict(title="", tickfont=dict(size=11)),
+                yaxis=dict(title="Members", gridcolor="#f1f5f9", gridwidth=0.5, zeroline=False),
+                bargap=0.25)
             st.plotly_chart(fig_raf, use_container_width=True)
 
         with col_right:
-            st.markdown('<div class="section-header">🔄 Recapture by Priority</div>', unsafe_allow_html=True)
-            df_rev = run_query_df("SELECT * FROM HEDIS_QUALITY_DB.CLAIMS_DATA.V_REVENUE_SIMULATOR")
-            fig_rev = px.pie(df_rev, values="TOTAL_REVENUE_AT_RISK", names="RECAPTURE_PRIORITY",
-                             hole=0.55, color_discrete_sequence=["#ef4444","#f59e0b","#8b5cf6","#94a3b8"])
-            fig_rev.update_layout(height=400, margin=dict(l=10,r=10,t=30,b=10),
-                                 font=dict(family="DM Sans"), paper_bgcolor="rgba(0,0,0,0)")
-            fig_rev.update_traces(textposition='inside', textinfo='percent+label', textfont_size=11)
-            st.plotly_chart(fig_rev, use_container_width=True)
+            st.markdown('<div class="section-header">💰 Revenue by RAF Tier</div>', unsafe_allow_html=True)
+            # Horizontal bar: total revenue per RAF bucket
+            df_raf["TOTAL_REVENUE"] = df_raf["MEMBERS"] * df_raf["AVG_REVENUE"]
+            fig_rev_tier = go.Figure()
+            fig_rev_tier.add_trace(go.Bar(
+                y=df_raf["RAF_BUCKET"], x=df_raf["TOTAL_REVENUE"],
+                orientation='h',
+                marker=dict(color=colors[:len(df_raf)], line=dict(width=0)),
+                text=df_raf["TOTAL_REVENUE"].apply(lambda x: f"${x/1000000:.1f}M" if x >= 1000000 else f"${x/1000:.0f}K"),
+                textposition="outside", textfont=dict(size=11),
+            ))
+            fig_rev_tier.update_layout(height=380, showlegend=False,
+                margin=dict(l=0,r=60,t=20,b=40),
+                plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
+                font=dict(family="DM Sans", size=12),
+                xaxis=dict(title="", showticklabels=False, showgrid=False, zeroline=False),
+                yaxis=dict(title="", autorange="reversed"),
+                bargap=0.3)
+            st.plotly_chart(fig_rev_tier, use_container_width=True)
 
-        # Quick stats row
-        st.markdown('<div class="section-header">📋 Key Metrics</div>', unsafe_allow_html=True)
+        # ---- ROW 2: Condition Prevalence ----
+        st.markdown('<div class="section-header">🏥 Condition Prevalence & HCC Capture Rate</div>', unsafe_allow_html=True)
+        st.caption("How many members have each condition vs how many have the corresponding HCC coded in EDS — the gap is your coding opportunity.")
+
+        df_prev = run_query_df("""
+            WITH member_one AS (
+                SELECT *, ROW_NUMBER() OVER (PARTITION BY MEMBER_ID ORDER BY MEMBER_ID) AS RN
+                FROM HEDIS_QUALITY_DB.CLAIMS_DATA.MEMBER_ENROLLMENT
+            ),
+            members AS (SELECT * FROM member_one WHERE RN = 1),
+            eds AS (SELECT DISTINCT MEMBER_ID, HCC_CODE FROM HEDIS_QUALITY_DB.CLAIMS_DATA.EDS_SUBMISSIONS WHERE STATUS = 'Accepted')
+            SELECT
+                'Diabetes' AS CONDITION, SUM(DX_DIABETES) AS MEMBERS_WITH_CONDITION,
+                (SELECT COUNT(DISTINCT MEMBER_ID) FROM eds WHERE HCC_CODE IN ('HCC37','HCC38')) AS MEMBERS_HCC_CODED,
+                'HCC37/38' AS HCC_CODES, 0.302 AS TOP_RAF_WEIGHT
+            FROM members
+            UNION ALL SELECT 'Hypertension', SUM(DX_HYPERTENSION), 0, 'Non-HCC (I10)', 0 FROM members
+            UNION ALL SELECT 'CHF', SUM(DX_CHF),
+                (SELECT COUNT(DISTINCT MEMBER_ID) FROM eds WHERE HCC_CODE = 'HCC85'), 'HCC85', 0.323 FROM members
+            UNION ALL SELECT 'COPD', SUM(DX_COPD),
+                (SELECT COUNT(DISTINCT MEMBER_ID) FROM eds WHERE HCC_CODE IN ('HCC111','HCC112','HCC113')), 'HCC111', 0.328 FROM members
+            UNION ALL SELECT 'CKD', SUM(DX_CKD),
+                (SELECT COUNT(DISTINCT MEMBER_ID) FROM eds WHERE HCC_CODE IN ('HCC136','HCC137','HCC138')), 'HCC138', 0.069 FROM members
+            UNION ALL SELECT 'CAD', SUM(DX_CAD),
+                (SELECT COUNT(DISTINCT MEMBER_ID) FROM eds WHERE HCC_CODE IN ('HCC86','HCC87','HCC88')), 'HCC86/87/88', 0.231 FROM members
+            UNION ALL SELECT 'Depression', SUM(DX_DEPRESSION),
+                (SELECT COUNT(DISTINCT MEMBER_ID) FROM eds WHERE HCC_CODE = 'HCC59'), 'HCC59', 0.309 FROM members
+            UNION ALL SELECT 'Obesity', SUM(DX_OBESITY),
+                (SELECT COUNT(DISTINCT MEMBER_ID) FROM eds WHERE HCC_CODE = 'HCC22'), 'HCC22', 0.250 FROM members
+            ORDER BY MEMBERS_WITH_CONDITION DESC
+        """)
+
+        if not df_prev.empty:
+            total_members = s[0] if s[0] else 1500
+            df_prev["PREVALENCE_RATE"] = (df_prev["MEMBERS_WITH_CONDITION"] / total_members * 100).round(1)
+            df_prev["CAPTURE_RATE"] = (df_prev["MEMBERS_HCC_CODED"] / df_prev["MEMBERS_WITH_CONDITION"].replace(0, 1) * 100).round(1)
+            df_prev["CODING_GAP"] = df_prev["MEMBERS_WITH_CONDITION"] - df_prev["MEMBERS_HCC_CODED"]
+
+            # Grouped bar: Prevalence vs Capture
+            fig_prev = go.Figure()
+            fig_prev.add_trace(go.Bar(
+                name="Members with Condition",
+                x=df_prev["CONDITION"], y=df_prev["MEMBERS_WITH_CONDITION"],
+                marker=dict(color="#8b5cf6", opacity=0.85, line=dict(width=0)),
+                text=df_prev.apply(lambda r: f"{r['MEMBERS_WITH_CONDITION']}<br><span style='font-size:9px'>{r['PREVALENCE_RATE']}%</span>", axis=1),
+                textposition="outside", textfont=dict(size=10),
+            ))
+            fig_prev.add_trace(go.Bar(
+                name="HCC Coded in EDS",
+                x=df_prev["CONDITION"], y=df_prev["MEMBERS_HCC_CODED"],
+                marker=dict(color="#10b981", opacity=0.85, line=dict(width=0)),
+                text=df_prev.apply(lambda r: f"{r['MEMBERS_HCC_CODED']}<br><span style='font-size:9px'>{r['CAPTURE_RATE']}%</span>" if r['MEMBERS_HCC_CODED'] > 0 else "", axis=1),
+                textposition="outside", textfont=dict(size=10),
+            ))
+            fig_prev.update_layout(
+                barmode="group", height=420,
+                margin=dict(l=0,r=0,t=20,b=40),
+                plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
+                font=dict(family="DM Sans"),
+                yaxis=dict(title="Members", gridcolor="#f1f5f9", gridwidth=0.5, zeroline=False),
+                xaxis=dict(title=""),
+                legend=dict(orientation="h", y=-0.12, x=0.5, xanchor="center",
+                           font=dict(size=11), bgcolor="rgba(0,0,0,0)"),
+                bargap=0.3, bargroupgap=0.08)
+            st.plotly_chart(fig_prev, use_container_width=True)
+
+            # Prevalence data table
+            st.dataframe(
+                df_prev[["CONDITION","MEMBERS_WITH_CONDITION","PREVALENCE_RATE","HCC_CODES","MEMBERS_HCC_CODED","CAPTURE_RATE","CODING_GAP","TOP_RAF_WEIGHT"]],
+                use_container_width=True, hide_index=True,
+                column_config={
+                    "CONDITION": "Condition",
+                    "MEMBERS_WITH_CONDITION": st.column_config.NumberColumn("Members", format="%d"),
+                    "PREVALENCE_RATE": st.column_config.NumberColumn("Prevalence %", format="%.1f%%"),
+                    "HCC_CODES": "HCC Code(s)",
+                    "MEMBERS_HCC_CODED": st.column_config.NumberColumn("HCC Coded", format="%d"),
+                    "CAPTURE_RATE": st.column_config.ProgressColumn("Capture Rate", min_value=0, max_value=100, format="%.0f%%"),
+                    "CODING_GAP": st.column_config.NumberColumn("Coding Gap", format="%d"),
+                    "TOP_RAF_WEIGHT": st.column_config.NumberColumn("RAF Weight", format="%.3f"),
+                })
+
+        # ---- ROW 3: Quick stats ----
+        st.markdown('<div class="section-header">📋 Coding Metrics</div>', unsafe_allow_html=True)
         m1, m2, m3, m4 = st.columns(4)
         with m1:
-            st.metric("Total HCCs Coded", f"{sni(s[3])}")
+            st.metric("Total HCCs Coded", sni(s[3]))
         with m2:
-            st.metric("Avg HCCs/Member", f"{s[4]}")
+            st.metric("Avg HCCs/Member", sn(s[4], ".1f"))
         with m3:
-            st.metric("Members with 0 HCCs", f"{sni(s[9])}")
+            st.metric("Members with 0 HCCs", sni(s[9]))
         with m4:
-            st.metric("Members with 3+ HCCs", f"{sni(s[10])}")
+            st.metric("Members with 3+ HCCs", sni(s[10]))
 
     except Exception as e:
         st.error(f"Error: {str(e)}")
@@ -924,10 +1034,15 @@ with tab_chat:
             if "dataframe" in msg:
                 st.dataframe(msg["dataframe"], use_container_width=True, hide_index=True)
 
+    # Always show chat input
+    typed_prompt = st.chat_input("Ask about HCC coding, RAF scores, recapture, suspects, revenue...")
+
+    # Check for pending button question OR typed input
+    prompt = None
     if "ra_pending" in st.session_state:
         prompt = st.session_state.pop("ra_pending")
-    else:
-        prompt = st.chat_input("Ask about HCC coding, RAF scores, recapture, suspects, revenue...")
+    elif typed_prompt:
+        prompt = typed_prompt
 
     if prompt:
         st.session_state.ra_messages.append({"role": "user", "content": prompt})
